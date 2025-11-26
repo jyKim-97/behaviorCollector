@@ -16,16 +16,30 @@ class BehavExtractor:
             cv2.VideoCapture(path) for path in bcollector.video_path if path is not None
         ]
         
-    def extract_epochs(self, path_dir: str, tqdm_fn=None):
+    def extract_epochs(self, path_dir: str, tqdm_fn=None, selections=None):
         if any(os.scandir(path_dir)):
             warnings.warn(f"Directory {path_dir} is not empty")
             
         if tqdm_fn is None:
             tqdm_fn = tqdm
         
-        for b in self.bcollector.behav_set:
-            bar = tqdm_fn(total=len(b.time_ms), desc=f"Extracting {b.name} epochs")
-            for n in range(len(b.time_ms)):
+        for behav_idx, b in enumerate(self.bcollector.behav_set):
+            if not b.time_ms:
+                continue
+
+            selected_indices = list(range(len(b.time_ms)))
+            if selections is not None:
+                selected = selections.get(behav_idx)
+                # None -> select all epochs for this behavior
+                if selected is None:
+                    selected_indices = list(range(len(b.time_ms)))
+                else:
+                    selected_indices = sorted(selected)
+                if not selected_indices:
+                    continue
+
+            bar = tqdm_fn(total=len(selected_indices), desc=f"Extracting {b.name} epochs")
+            for n in selected_indices:
                 try:
                     if b.type == STATE:
                         start_ms = b.time_ms[n][0]

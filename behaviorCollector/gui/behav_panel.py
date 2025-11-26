@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QFormLayout, QPushButton, QLineEdit, QLabel,
     QScrollArea, QGraphicsLineItem, QSizePolicy,
     QFileDialog, QGraphicsTextItem,
-    QMessageBox
+    QMessageBox, QDialog, QCheckBox
 )
 
 from PyQt5.QtCore import Qt, pyqtSignal, QLineF, QRectF
@@ -90,6 +90,88 @@ class BehavItemRow(QPushButton):
         
     def on_clicked(self):
         self.clicked_with_key.emit(self.key_id)
+
+
+class BehaviorSelectionDialog(QDialog):
+    """Dialog for selecting which behaviors (all epochs) to export."""
+
+    def __init__(self, bcollector: BehavCollector, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Behaviors to Export")
+        self.setMinimumSize(400, 300)
+        self.checkboxes = []
+
+        layout = QVBoxLayout()
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_content = QWidget()
+        content_layout = QVBoxLayout()
+
+        has_epoch = False
+        for behav_idx, behav in enumerate(bcollector.behav_set):
+            if not behav.time_ms:
+                continue
+
+            # show total count for quick overview
+            label = f"{behav.name} ({behav.type}) - {len(behav.time_ms)} epoch(s)"
+            cb = QCheckBox(label)
+            cb.setChecked(True)
+            content_layout.addWidget(cb)
+            self.checkboxes.append((cb, behav_idx))
+            has_epoch = True
+
+        content_layout.addStretch()
+        scroll_content.setLayout(content_layout)
+        scroll_area.setWidget(scroll_content)
+        layout.addWidget(scroll_area)
+
+        button_row = QHBoxLayout()
+        self.button_select_all = QPushButton("Select All")
+        self.button_clear_all = QPushButton("Clear All")
+        self.button_export = QPushButton("Export")
+        self.button_cancel = QPushButton("Cancel")
+
+        self.button_select_all.clicked.connect(self._select_all)
+        self.button_clear_all.clicked.connect(self._clear_all)
+        self.button_export.clicked.connect(self._accept_if_any)
+        self.button_cancel.clicked.connect(self.reject)
+
+        button_row.addWidget(self.button_select_all)
+        button_row.addWidget(self.button_clear_all)
+        button_row.addStretch()
+        button_row.addWidget(self.button_cancel)
+        button_row.addWidget(self.button_export)
+        layout.addLayout(button_row)
+
+        self.setLayout(layout)
+
+        if not has_epoch:
+            self.button_export.setEnabled(False)
+            self.button_select_all.setEnabled(False)
+            self.button_clear_all.setEnabled(False)
+
+    def _select_all(self):
+        for cb, _ in self.checkboxes:
+            cb.setChecked(True)
+
+    def _clear_all(self):
+        for cb, _ in self.checkboxes:
+            cb.setChecked(False)
+
+    def _accept_if_any(self):
+        if any(cb.isChecked() for cb, _ in self.checkboxes):
+            self.accept()
+        else:
+            QMessageBox.warning(self, "No Selection", "Please select at least one behavior to export.")
+
+    def selected_epochs(self):
+        selections = {}
+        for cb, behav_idx in self.checkboxes:
+            if cb.isChecked():
+                # select all epochs for this behavior
+                selections[behav_idx] = None
+        return selections
 
 
 class BehavPanel(QWidget):
@@ -338,12 +420,26 @@ class BehavPanel(QWidget):
     
     @error2messagebox(to_warn=True)
     def export_epochs(self):
+        if self.bcollector is None or self.bcollector.num == 0:
+            raise ValueError("No behavior data to export. Please load or create behaviors first.")
+
+        if not any(b.time_ms for b in self.bcollector.behav_set):
+            raise ValueError("There are no behavior epochs to export.")
+
+        dialog = BehaviorSelectionDialog(self.bcollector, parent=self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        selections = dialog.selected_epochs()
+        if not selections:
+            raise ValueError("No behaviors selected for export.")
+
         path_dir = QFileDialog.getExistingDirectory(self, "Select export directory")
         if path_dir:
             self.bcollector.update_video_path(self.video_controller.current_video_path)
             extractor = BehavExtractor(self.bcollector)
-            if extractor.extract_epochs(path_dir, tqdm_fn=tqdm_qt):
-                QMessageBox.information(self, "Success", "Behavior epochs exported successfully.")
+            if extractor.extract_epochs(path_dir, selections=selections, tqdm_fn=tqdm_qt):
+                QMessageBox.information(self, "Success", "Selected behavior epochs exported successfully.")
         
     def _add_behav_set(self):
         existing_keys = [b.behav_key for b in self.behav_rows]
