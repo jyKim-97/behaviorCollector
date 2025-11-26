@@ -76,7 +76,7 @@ class EEGDialog(QDialog):
         for idx in range(max_cbrain):
             chk = QCheckBox(str(idx + 1))
             chk.setChecked(idx == 0)
-            chk.stateChanged.connect(self._handle_cbrain_toggle)
+            chk.stateChanged.connect(self.update_plot)
             self.cbrain_checks.append(chk)
             grid.addWidget(chk, 1, idx + 1, alignment=Qt.AlignCenter)
 
@@ -111,7 +111,7 @@ class EEGDialog(QDialog):
         row.addWidget(self.ymin_box)
         row.addWidget(QLabel("ymax"))
         row.addWidget(self.ymax_box)
-        row.addWidget(QLabel("± seconds around video time"))
+        row.addWidget(QLabel("+/- seconds around video time"))
         row.addWidget(self.window_box)
         row.addStretch(1)
         row.addWidget(self.time_label)
@@ -132,22 +132,13 @@ class EEGDialog(QDialog):
     def selected_channels(self):
         return [idx + 1 for idx, chk in enumerate(self.channel_checks) if chk.isChecked()]
 
-    def selected_cbrain(self):
-        for idx, chk in enumerate(self.cbrain_checks):
-            if chk.isChecked():
-                return idx + 1
-        return None
+    def selected_cbrains(self):
+        return [idx + 1 for idx, chk in enumerate(self.cbrain_checks) if chk.isChecked()]
 
-    def _handle_cbrain_toggle(self, checked):
-        if not checked:
-            return
-        sender = self.sender()
-        for chk in self.cbrain_checks:
-            if chk is not sender:
-                chk.blockSignals(True)
-                chk.setChecked(False)
-                chk.blockSignals(False)
-        self.update_plot()
+    def selected_cbrain(self):
+        """Backward-compatible helper for callers expecting a single selection."""
+        cbrains = self.selected_cbrains()
+        return cbrains[0] if cbrains else None
 
     def _current_video_time_s(self):
         if self.controller is None:
@@ -164,14 +155,14 @@ class EEGDialog(QDialog):
     @error2messagebox(to_warn=True)
     def update_plot(self, *args, **kwargs):
         channels = self.selected_channels()
-        cbrain_id = self.selected_cbrain()
+        cbrain_ids = self.selected_cbrains()
 
         fig = self.canvas.figure
         fig.clf()
 
-        if not channels or cbrain_id is None:
+        if not channels or not cbrain_ids:
             ax = fig.add_subplot(1, 1, 1)
-            ax.text(0.5, 0.5, "Select Channel ID(s) and a CBRAIN ID", ha="center", va="center")
+            ax.text(0.5, 0.5, "Select Channel ID(s) and CBRAIN ID(s)", ha="center", va="center")
             ax.set_axis_off()
             self.canvas.draw_idle()
             return
@@ -185,14 +176,18 @@ class EEGDialog(QDialog):
         if ymin >= ymax:
             raise ValueError("ymin must be smaller than ymax.")
         subplot_total = len(channels)
+        colors = ["#00509e", "#d1495b", "#2b9348", "#ff7b00", "#6a4c93"]
 
         for idx, ch in enumerate(channels):
             ax = fig.add_subplot(subplot_total, 1, idx + 1)
-            signal = self.raw_data[ch - 1, :, cbrain_id - 1].squeeze()
-            if mask.any():
-                ax.plot(time_sec[mask], signal[mask], color="#00509e")
-            else:
-                ax.text(0.5, 0.5, "No data in range", ha="center", va="center", transform=ax.transAxes)
+            for cb_idx, cbrain_id in enumerate(cbrain_ids):
+                signal = self.raw_data[ch - 1, :, cbrain_id - 1].squeeze()
+                color = colors[cb_idx % len(colors)]
+                label = f"CBRAIN {cbrain_id}"
+                if mask.any():
+                    ax.plot(time_sec[mask], signal[mask], color=color, label=label, linewidth=1.2)
+                else:
+                    ax.text(0.5, 0.5, "No data in range", ha="center", va="center", transform=ax.transAxes)
             ax.set_ylabel(f"Ch {ch}")
             ax.set_ylim(ymin, ymax)
             if idx == subplot_total - 1:
@@ -202,6 +197,8 @@ class EEGDialog(QDialog):
             ax.grid(True, linestyle="--", alpha=0.4)
             ax.set_xlim(center - window, center + window)
             ax.axvline(center, color="black", linestyle="-", linewidth=1)
+            if len(cbrain_ids) > 1:
+                ax.legend(loc="upper right", fontsize="small")
 
         fig.tight_layout()
         self.canvas.draw_idle()
